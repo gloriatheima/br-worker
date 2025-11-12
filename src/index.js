@@ -8,7 +8,7 @@ GET /audio/:key 会调用 serveAudioFromR2(key, env);
 import { handleTalkRequest, serveAudioFromR2 } from './talk-worker.js';
 // 新增：从 seo-analytic 模块导入处理函数（用于 POST /seo）
 // 注意：这里改为相对于 backend/src 的本地导入（保持注释不变）
-import { handleSeo } from './seo-analytic.js';
+// import { handleSeo } from './seo-analytic.js';
 
 
 /**
