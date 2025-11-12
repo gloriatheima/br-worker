@@ -1,0 +1,57 @@
+# backend/wrangler.toml (示例 - 不含明文 secret)
+name = "br-proxy-worker"
+type = "javascript"
+main = "src/index.js"
+compatibility_date = "2025-09-02"
+# 根据需要启用 nodejs 兼容层
+compatibility_flags = ["nodejs_compat"]
+
+# 如果你希望在 toml 中指定 site（monorepo 前端在 ../frontend/dist）
+[site]
+bucket = "../frontend/dist"
+# entry-point 可选；多数情况下使用 --site 参数或设置 entry-point="." 也可
+#entry-point = "workers-site"
+
+# AI binding（保持 binding 名称，但不要把密钥放在文件中）
+# 若你的 wrangler 版本/文档要求不同，请按官方格式调整
+ai = { binding = "AI" }
+
+account_id = "fcaaec845fe02e091365a0103ea4b97f"
+
+[vars]
+BR_API_BASE = "https://api.cloudflare.com/client/v4/accounts"
+BR_ACCOUNT_ID = "fcaaec845fe02e091365a0103ea4b97f"
+DEBUG_SEO = "1"
+
+# 移除明文令牌。不要在此处写 BR_API_TOKEN。
+# 使用本地命令设置 secret：
+#   cd backend && npx wrangler secret put BR_API_TOKEN
+# 或在 CI 中把它放到 GitHub Secrets (示例名字: BR_API_TOKEN)，并在 workflow 中注入。
+# BR_API_TOKEN = "EWIvq7q8lZbR88iQEFXdixG78xDuCDttDZaOqzmb"
+
+WORKERS_AI_ENDPOINT = "https://api.cloudflare.com/client/v4/accounts/YOUR_ACCOUNT_ID/ai/run/@cf/deepgram/aura-1"
+
+[[r2_buckets]]
+binding = "AUDIO_BUCKET"
+bucket_name = "br-makeyourbrowsertalk"
+preview_bucket_name = "br-makeyourbrowsertalk-preview"
+
+[durable_objects]
+bindings = [
+  { name = "MY_DO_NAMESPACE", class_name = "BrDurableObject" }
+]
+
+[[migrations]]
+tag = "v1"
+new_classes = [ "BrDurableObject" ]
+
+[[kv_namespaces]]
+binding = "MY_KV"
+id = "79e6f0c6a3cc419ab33be66109d027e8"
+preview_id = "4af56a58f9414c6f8b40a5439bc8d315"
+
+[[d1_databases]]
+binding = "MY_D1"
+database_name = "br-d1"
+database_id = "49eb78b4-6f5c-4d8d-bd8b-d035aeb25235"
+preview_database_id = "38443b5f-9267-484e-af96-a16daa614112"
