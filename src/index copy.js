@@ -8,7 +8,7 @@ GET /audio/:key 会调用 serveAudioFromR2(key, env)
 import { handleTalkRequest, serveAudioFromR2 } from './talk-worker.js';
 // 新增：从 seo-analytic 模块导入处理函数（用于 POST /seo）
 // 注意：这里改为相对于 backend/src 的本地导入（保持注释不变）
-import { handleSeo } from './seo-analytic.js';
+
 
 
 /**
@@ -26,7 +26,7 @@ import { handleSeo } from './seo-analytic.js';
 // 新增：从 backend 的 seo-analytic 导出 BrowserDo，以便 wrangler (v4) 能检测到 Durable Object 的 class 导出。
 // 说明（中文注释）：确保 wrangler.toml 中 durable_objects.bindings[].class_name 与这里导出的类名一致（例如 BrowserDo）。
 // 修正路径：从 backend/src/index.js 导出 backend 同目录实现（不要上跳到不存在的位置）
-export { BrowserDo } from './seo-analytic.js';
+
 
 // 如果你仍然想保留从本地 seo-analytic.js 的 handleSeo（同目录），上面的导出不会影响其行为。
 // 注意：若你希望 handleSeo 来自其它路径，也可以把上面的 import 调整为相应路径。

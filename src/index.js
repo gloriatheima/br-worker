@@ -3,12 +3,12 @@ import { getConfig } from './config.js';
 在文件顶部添加了一行 import（從 src/talk-worker.js 导入 handleTalkRequest 与 serveAudioFromR2），
 并在 fetch handler 的开头（计算 pathname 后、原有 allowed 路由检查之前）插入了两条路由判断：
 POST /talk 会调用 handleTalkRequest(request, env, ctx, cfg)，
-GET /audio/:key 会调用 serveAudioFromR2(key, env)
- */
+GET /audio/:key 会调用 serveAudioFromR2(key, env);
+*/
 import { handleTalkRequest, serveAudioFromR2 } from './talk-worker.js';
 // 新增：从 seo-analytic 模块导入处理函数（用于 POST /seo）
 // 注意：这里改为相对于 backend/src 的本地导入（保持注释不变）
- 
+import { handleSeo } from './seo-analytic.js';
 
 
 /**
@@ -39,7 +39,22 @@ export default {
 
         try {
             const url = new URL(request.url);
-            const pathname = url.pathname.replace(/\/+$/, "");
+            // NOTE: Normalize pathname by trimming trailing slashes first
+            const rawPathname = url.pathname.replace(/\/+$/, "");
+
+            // ===== API prefix handling =====
+            // This Worker is intended to be bound to browser-rendering.gloriatrials.com/api/*
+            // To avoid intercepting non-API site requests (which should be served by Pages),
+            // we early-return 404 for requests not starting with /api.
+            // Cloudflare route configuration should be: browser-rendering.gloriatrials.com/api/*
+            if (!rawPathname.startsWith("/api")) {
+                // Not an API request — let Pages handle it (by returning 404 here, Worker won't claim the path).
+                return jsonError("not_found", 404);
+            }
+
+            // Strip the /api prefix for internal routing convenience.
+            // External: /api/scrape -> Internal pathname: /scrape
+            const pathname = rawPathname.replace(/^\/api/, "") || "/";
 
             // --- 临时调试路由：/_debug/secrets (仅用于本地调试，完成后请删除) ---
             if (pathname === "/_debug/secrets") {
@@ -97,7 +112,7 @@ export default {
                 return await handleSeo(request, env, ctx, cfg);
             }
 
-            // allowed routes per your request
+            // allowed routes per your request (these are internal paths after /api prefix is removed)
             const allowed = [
                 "/content",
                 "/snapshot",
