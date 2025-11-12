@@ -7,11 +7,25 @@
  * This version is tolerant: if cfg (from getConfig) lacks endpoint or key,
  * it will fallback to environment variables (env.WORKERS_AI_ENDPOINT, env.WORKERS_AI_KEY, env.CF_API_TOKEN).
  * It logs debug info to the worker console (wrangler dev) about endpoint presence and TTS request failures.
+ *
+ * 修改说明（中文）:
+ * - 增加对 OPTIONS 预检请求的早期返回（CORS preflight），避免浏览器直接向第三方 API 发起预检导致失败。
+ * - 修复少量 debug 输出的 token 检测逻辑（避免重复检查相同字段）。
+ * - 保留并未删除原有注释，局部添加中文注释以便维护与排查。
  */
 
 import { getConfig } from "./config.js";
 
 export async function handleTalkRequest(request, env, ctx, cfg = null) {
+    // 如果是 CORS 预检, 直接返回 204 + CORS 头（避免浏览器因预检失败而阻断）
+    // 注意：index.js 可能也会在全局路由层处理 OPTIONS，但在这里做保险处理可以避免遗漏
+    if (request && request.method && request.method.toUpperCase() === "OPTIONS") {
+        return new Response(null, {
+            status: 204,
+            headers: corsHeaders()
+        });
+    }
+
     const config = cfg || getConfig(env);
 
     // merge env fallbacks
@@ -83,7 +97,8 @@ export async function handleTalkRequest(request, env, ctx, cfg = null) {
     // debug log endpoint/token presence
     try {
         console.log("TTS debug: endpoint=", !!merged.WORKERS_AI_ENDPOINT ? merged.WORKERS_AI_ENDPOINT : "(none)");
-        console.log("TTS debug: hasToken=", !!(merged.CF_API_TOKEN || merged.WORKERS_AI_KEY || merged.WORKERS_AI_KEY));
+        // 修复：之前重复检查 WORKERS_AI_KEY 两次，改为检查 CF_API_TOKEN / WORKERS_AI_KEY / BR_API_TOKEN 三者中的任意一个
+        console.log("TTS debug: hasToken=", !!(merged.CF_API_TOKEN || merged.WORKERS_AI_KEY || merged.BR_API_TOKEN));
     } catch (e) { }
 
     // call TTS
@@ -115,7 +130,12 @@ export async function handleTalkRequest(request, env, ctx, cfg = null) {
     return jsonResponse({ key, extractedText }, 200);
 }
 
-export async function serveAudioFromR2(key, env) {
+export async function serveAudioFromR2(key, env, request = null) {
+    // 如果是预检请求（偶发），在这里也做兼容处理（部分路由会把 OPTIONS 转发到音频处理）
+    if (request && request.method && request.method.toUpperCase() === "OPTIONS") {
+        return new Response(null, { status: 204, headers: corsHeaders() });
+    }
+
     try {
         const obj = await env.AUDIO_BUCKET.get(key);
         if (!obj) return jsonError("not_found", 404);
@@ -264,6 +284,7 @@ function jsonError(message, status = 400) {
     return new Response(JSON.stringify({ error: message, status }), { status, headers: corsHeaders({ "Content-Type": "application/json" }) });
 }
 function corsHeaders(extra = {}) {
+    // 注意：生产环境建议把 "*" 替换为确定的前端 origin（例如 https://browser-rendering.gloriatrials.com）
     return Object.assign(
         {
             "Access-Control-Allow-Origin": "*",
