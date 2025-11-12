@@ -1,4 +1,4 @@
-# backend/wrangler.toml (示例 - 含明文 secret，按你要求保留明文)
+# backend/wrangler.toml (示例 - 不含明文 secret)
 name = "br-worker"
 main = "src/index.js"
 compatibility_date = "2025-09-02"
@@ -16,15 +16,10 @@ BR_API_BASE = "https://api.cloudflare.com/client/v4/accounts"
 BR_ACCOUNT_ID = "fcaaec845fe02e091365a0103ea4b97f"
 DEBUG_SEO = "1"
 
-# 前端允许的 Origin 白名单（逗号分隔）
-ALLOWED_ORIGINS = "https://browser-rendering.gloriatrials.com"
-
-# 明文令牌（你已表示接受风险，下面示例把 token 以明文放入 vars）
-# 注意：把下面的占位符替换为你真实的 token 值（示例： "pk_live_xxx"）
-# 强烈建议仅在受信任的私人仓库或本地环境使用明文，公开仓库请勿保留。
-BR_API_TOKEN = "EWIvq7q8lZbR88iQEFXdixG78xDuCDttDZaOqzmb"
-CF_API_TOKEN = "EWIvq7q8lZbR88iQEFXdixG78xDuCDttDZaOqzmb"
-# 如果还有其它需要明文的 env，可在下方继续添加。
+# 移除明文令牌。不要在此处写 BR_API_TOKEN。
+# 使用本地命令设置 secret：
+#   cd backend && npx wrangler secret put BR_API_TOKEN
+# 或在 CI 中把它放到 GitHub Secrets (示例名字: BR_API_TOKEN)，并在 workflow 中注入。
 
 WORKERS_AI_ENDPOINT = "https://api.cloudflare.com/client/v4/accounts/fcaaec845fe02e091365a0103ea4b97f/ai/run/@cf/deepgram/aura-1"
 

@@ -32,56 +32,10 @@ import { handleTalkRequest, serveAudioFromR2 } from './talk-worker.js';
 // 注意：若你希望 handleSeo 来自其它路径，也可以把上面的 import 调整为相应路径。
 // 这里保留你原有的导入以尊重你的项目结构（你可以在需要时统一路径）。
 
-/* ============================
-   CORS / allowlist helpers
-   ============================ */
-
-/**
- * Reads ALLOWED_ORIGINS from env (string, comma-separated) and returns array
- * Example: "https://browser-rendering.gloriatrials.com,https://staging.example.com"
- */
-function getAllowedOrigins(env) {
-    const raw = (env && (env.ALLOWED_ORIGINS || env.ALLOWED_ORIGINS)) || "";
-    return raw.split(",").map(s => s.trim()).filter(Boolean);
-}
-
-function isOriginAllowed(origin, allowedOrigins) {
-    if (!origin) return false;
-    return allowedOrigins.includes(origin);
-}
-
-/**
- * Adds CORS headers to a Response object (returns new Response)
- * - origin must be the exact origin value from the request (e.g. "https://browser-rendering.gloriatrials.com")
- * - allowCredentials: whether to set Access-Control-Allow-Credentials: true (set true if you use cookies)
- */
-function withCorsHeaders(resp, origin, allowCredentials = false) {
-    const headers = new Headers(resp.headers);
-    headers.set("Access-Control-Allow-Origin", origin);
-    headers.set("Vary", "Origin");
-    if (allowCredentials) headers.set("Access-Control-Allow-Credentials", "true");
-    // expose common headers if frontend needs to read them
-    headers.set("Access-Control-Expose-Headers", "Content-Length,Content-Type,ETag");
-    return new Response(resp.body, {
-        status: resp.status,
-        statusText: resp.statusText,
-        headers
-    });
-}
-
-/* ============================
-   Main export
-   ============================ */
-
 export default {
     async fetch(request, env, ctx) {
         // Use unified config (CONFIG_SECRET) and fallbacks
         const cfg = getConfig(env);
-
-        // Determine origin and allowlist early so preflight and responses can use them
-        const reqOrigin = request.headers.get("Origin");
-        const allowedOrigins = getAllowedOrigins(env);
-        const originAllowed = reqOrigin && isOriginAllowed(reqOrigin, allowedOrigins);
 
         try {
             const url = new URL(request.url);
@@ -95,29 +49,7 @@ export default {
             // Cloudflare route configuration should be: browser-rendering.gloriatrials.com/api/*
             if (!rawPathname.startsWith("/api")) {
                 // Not an API request — let Pages handle it (by returning 404 here, Worker won't claim the path).
-                const r = jsonError("not_found", 404);
-                return originAllowed ? withCorsHeaders(r, reqOrigin, false) : r;
-            }
-
-            // Handle CORS preflight for any /api/* path before further routing.
-            if (request.method === "OPTIONS") {
-                // If there's no Origin, return minimal 204 (non-browser caller)
-                if (!reqOrigin) return new Response(null, { status: 204 });
-
-                if (!originAllowed) {
-                    return new Response("CORS origin denied", { status: 403 });
-                }
-
-                const headers = {
-                    "Access-Control-Allow-Origin": reqOrigin,
-                    "Access-Control-Allow-Methods": "GET,HEAD,POST,PUT,DELETE,OPTIONS",
-                    "Access-Control-Allow-Headers": "Content-Type,Authorization,X-Requested-With",
-                    "Access-Control-Max-Age": "600",
-                    "Vary": "Origin",
-                    // If you want to support cookies from frontend, uncomment following:
-                    // "Access-Control-Allow-Credentials": "true"
-                };
-                return new Response(null, { status: 204, headers });
+                return jsonError("not_found", 404);
             }
 
             // Strip the /api prefix for internal routing convenience.
@@ -127,8 +59,7 @@ export default {
             // --- 临时调试路由：/_debug/secrets (仅用于本地调试，完成后请删除) ---
             if (pathname === "/_debug/secrets") {
                 if (request.method !== "GET") {
-                    const r = jsonError("method_not_allowed", 405);
-                    return originAllowed ? withCorsHeaders(r, reqOrigin, false) : r;
+                    return jsonError("method_not_allowed", 405);
                 }
                 try {
                     // 重新读取 cfg 并同时检测 env 直接绑定
@@ -151,15 +82,13 @@ export default {
                         env_WORKERS_AI_ENDPOINT_preview: mask(env.WORKERS_AI_ENDPOINT),
                     };
 
-                    const baseResp = new Response(JSON.stringify({ ok: true, debug: out }, null, 2), {
+                    return new Response(JSON.stringify({ ok: true, debug: out }, null, 2), {
                         status: 200,
-                        headers: { "Content-Type": "application/json" },
+                        headers: { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*" },
                     });
-                    return originAllowed ? withCorsHeaders(baseResp, reqOrigin, false) : baseResp;
                 } catch (e) {
                     console.error("debug route error", e);
-                    const r = jsonError("debug_error", 500);
-                    return originAllowed ? withCorsHeaders(r, reqOrigin, false) : r;
+                    return jsonError("debug_error", 500);
                 }
             }
             // --- end debug route ---
@@ -167,15 +96,12 @@ export default {
             // New: handle POST /talk and GET /audio/:key routes (mounted from src/talk-worker.js)
             // These are placed before the BR proxy allowed-routes handling so /talk and /audio/* are served first.
             if (pathname === "/talk" && request.method === "POST") {
-                const resp = await handleTalkRequest(request, env, ctx, cfg);
-                return (reqOrigin && isOriginAllowed(reqOrigin, allowedOrigins)) ? withCorsHeaders(resp, reqOrigin, true) : resp;
+                return await handleTalkRequest(request, env, ctx, cfg);
             }
 
             if (request.method === "GET" && pathname.startsWith("/audio/")) {
                 const key = decodeURIComponent(pathname.slice("/audio/".length));
-                const resp = await serveAudioFromR2(key, env);
-                // serveAudioFromR2 likely returns binary; attach CORS if origin allowed
-                return (reqOrigin && isOriginAllowed(reqOrigin, allowedOrigins)) ? withCorsHeaders(resp, reqOrigin, true) : resp;
+                return await serveAudioFromR2(key, env);
             }
 
             // New: handle POST /seo (mounted from src/seo-analytic.js)
@@ -183,9 +109,7 @@ export default {
             // 新增：handle POST /seo 路由（支持 POST 与 OPTIONS，方便浏览器预检）
             if (pathname === "/seo" && (request.method === "POST" || request.method === "OPTIONS")) {
                 // 将请求转交给 seo-analytic.js 中导出的 handleSeo 处理
-                // Note: if handleSeo handles CORS itself, it will return appropriate headers
-                const resp = await handleSeo(request, env, ctx, cfg);
-                return (reqOrigin && isOriginAllowed(reqOrigin, allowedOrigins)) ? withCorsHeaders(resp, reqOrigin, true) : resp;
+                return await handleSeo(request, env, ctx, cfg);
             }
 
             // allowed routes per your request (these are internal paths after /api prefix is removed)
@@ -200,55 +124,37 @@ export default {
                 "/markdown",
                 "/status"
             ];
-            if (!allowed.includes(pathname)) {
-                const r = jsonError("not_found", 404);
-                return originAllowed ? withCorsHeaders(r, reqOrigin, false) : r;
-            }
+            if (!allowed.includes(pathname)) return jsonError("not_found", 404);
 
             if (pathname === "/status") {
-                const baseResp = new Response(JSON.stringify({ ok: true, ts: Date.now() }), {
+                return new Response(JSON.stringify({ ok: true, ts: Date.now() }), {
                     status: 200,
-                    headers: { "Content-Type": "application/json" },
+                    headers: { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*" },
                 });
-                return originAllowed ? withCorsHeaders(baseResp, reqOrigin, false) : baseResp;
             }
 
-            if (request.method !== "GET") {
-                const r = jsonError("method_not_allowed", 405);
-                return originAllowed ? withCorsHeaders(r, reqOrigin, false) : r;
-            }
+            if (request.method !== "GET") return jsonError("method_not_allowed", 405);
 
             const target = url.searchParams.get("url");
             if (!target && pathname !== "/scrape") {
                 // for non-scrape endpoints url is required
-                const r = jsonError("missing_url", 400);
-                return originAllowed ? withCorsHeaders(r, reqOrigin, false) : r;
+                return jsonError("missing_url", 400);
             }
-            if (target && !isHttpUrl(target)) {
-                const r = jsonError("invalid_url", 400);
-                return originAllowed ? withCorsHeaders(r, reqOrigin, false) : r;
-            }
+            if (target && !isHttpUrl(target)) return jsonError("invalid_url", 400);
 
             if (target) {
                 const parsedTarget = new URL(target);
                 if (isIpAddress(parsedTarget.hostname) && isPrivateIp(parsedTarget.hostname)) {
-                    const r = jsonError("forbidden_target", 400);
-                    return originAllowed ? withCorsHeaders(r, reqOrigin, false) : r;
+                    return jsonError("forbidden_target", 400);
                 }
             }
 
             // Prefer values from CONFIG_SECRET (cfg), fallback to env.* for backwards compatibility
             const accountId = cfg.BR_ACCOUNT_ID || env.BR_ACCOUNT_ID || env.account_id || env.ACCOUNT_ID;
-            if (!accountId) {
-                const r = jsonError("server_misconfigured: missing BR account id", 500);
-                return originAllowed ? withCorsHeaders(r, reqOrigin, false) : r;
-            }
+            if (!accountId) return jsonError("server_misconfigured: missing BR account id", 500);
 
             const token = cfg.CF_API_TOKEN || env.CF_API_TOKEN || env.BR_API_TOKEN || env.WORKERS_AI_KEY || "";
-            if (!token) {
-                const r = jsonError("server_misconfigured: missing API token (set as secret)", 500);
-                return originAllowed ? withCorsHeaders(r, reqOrigin, false) : r;
-            }
+            if (!token) return jsonError("server_misconfigured: missing API token (set as secret)", 500);
 
             // determine action: map incoming route to BR action name directly
             let action = pathname.slice(1); // e.g. "screenshot" | "pdf" | "content" | "scrape"
@@ -290,8 +196,8 @@ export default {
             const cached = await cache.match(cacheKey);
             if (cached) {
                 const cachedClone = new Response(cached.body, cached);
-                // attach CORS if appropriate
-                return originAllowed ? withCorsHeaders(cachedClone, reqOrigin, false) : cachedClone;
+                cachedClone.headers.set("Access-Control-Allow-Origin", "*");
+                return cachedClone;
             }
 
             // Build payload(s) to send to BR.
@@ -371,14 +277,14 @@ export default {
 
                                 // If looks like HTML (starts with '<'), use HTMLRewriter to fix relative URLs
                                 if (s.startsWith("<")) {
-                                    const originTarget = target ? new URL(target).origin : '';
+                                    const origin = target ? new URL(target).origin : '';
                                     const response = new Response(s, { status: 200, headers: { "Content-Type": "text/html; charset=utf-8" } });
 
                                     const rewriter = new HTMLRewriter()
                                         .on('head', {
                                             element(element) {
                                                 try {
-                                                    if (originTarget) element.prepend(`<base href="${originTarget}">`, { html: true });
+                                                    if (origin) element.prepend(`<base href="${origin}">`, { html: true });
                                                 } catch (e) { }
                                             }
                                         })
@@ -398,14 +304,13 @@ export default {
                                         try {
                                             const cachedResp = transformed.clone();
                                             const headers = new Headers(cachedResp.headers);
-                                            // store cached with wildcard CORS? we store without CORS header; runtime adds CORS on response
+                                            headers.set("Access-Control-Allow-Origin", "*");
                                             await cache.put(cacheKey, new Response(await cachedResp.text(), { status: 200, headers }));
                                         } catch (e) {
                                             console.error("cache put failed:", e);
                                         }
                                     })());
-                                    // attach CORS if origin allowed
-                                    return originAllowed ? withCorsHeaders(transformed, reqOrigin, false) : transformed;
+                                    return transformed;
                                 }
 
                                 // data URI handling
@@ -420,11 +325,11 @@ export default {
                                                 const bytes = base64ToUint8Array(payloadData);
                                                 const resp = new Response(bytes, {
                                                     status: 200,
-                                                    headers: { "Content-Type": mime, "Cache-Control": "public, max-age=60" }
+                                                    headers: { "Content-Type": mime, "Access-Control-Allow-Origin": "*", "Cache-Control": "public, max-age=60" }
                                                 });
                                                 ctx.waitUntil(cache.put(cacheKey, resp.clone()));
                                                 clearTimeout(timeout);
-                                                return originAllowed ? withCorsHeaders(resp, reqOrigin, false) : resp;
+                                                return resp;
                                             } catch (e) {
                                                 console.error("dataURI base64 decode failed:", e);
                                             }
@@ -432,10 +337,10 @@ export default {
                                             const text = decodeURIComponent(payloadData);
                                             const resp = new Response(text, {
                                                 status: 200,
-                                                headers: { "Content-Type": mime }
+                                                headers: { "Content-Type": mime, "Access-Control-Allow-Origin": "*" }
                                             });
                                             clearTimeout(timeout);
-                                            return originAllowed ? withCorsHeaders(resp, reqOrigin, false) : resp;
+                                            return resp;
                                         }
                                     }
                                 }
@@ -448,11 +353,11 @@ export default {
                                         const contentType = j.content_type || "application/octet-stream";
                                         const resp = new Response(bytes, {
                                             status: 200,
-                                            headers: { "Content-Type": contentType, "Cache-Control": "public, max-age=60" }
+                                            headers: { "Content-Type": contentType, "Access-Control-Allow-Origin": "*", "Cache-Control": "public, max-age=60" }
                                         });
                                         ctx.waitUntil(cache.put(cacheKey, resp.clone()));
                                         clearTimeout(timeout);
-                                        return originAllowed ? withCorsHeaders(resp, reqOrigin, false) : resp;
+                                        return resp;
                                     } catch (e) {
                                         console.error("base64 decode failed:", e);
                                     }
@@ -463,20 +368,20 @@ export default {
                                 const respText = s;
                                 const resp = new Response(respText, {
                                     status: 200,
-                                    headers: { "Content-Type": maybeCt }
+                                    headers: { "Content-Type": maybeCt, "Access-Control-Allow-Origin": "*" }
                                 });
                                 clearTimeout(timeout);
-                                return originAllowed ? withCorsHeaders(resp, reqOrigin, false) : resp;
+                                return resp;
                             }
 
                             // j.result object handling (e.g., { html: "..."} or structured)
                             if (typeof j.result === "object" && j.result !== null) {
                                 if (typeof j.result.html === "string") {
                                     const htmlStr = j.result.html;
-                                    const originTarget = target ? new URL(target).origin : '';
+                                    const origin = target ? new URL(target).origin : '';
                                     const response = new Response(htmlStr, { status: 200, headers: { "Content-Type": "text/html; charset=utf-8" } });
                                     const rewriter = new HTMLRewriter()
-                                        .on('head', { element(el) { try { if (originTarget) el.prepend(`<base href="${originTarget}">`, { html: true }); } catch (e) { } } })
+                                        .on('head', { element(el) { try { if (origin) el.prepend(`<base href="${origin}">`, { html: true }); } catch (e) { } } })
                                         .on('img', makeAbsolute(target))
                                         .on('script', makeAbsolute(target, ['src']))
                                         .on('link', makeAbsolute(target, ['href']))
@@ -486,24 +391,24 @@ export default {
                                         .on('link', removeIntegrity);
                                     const transformed = rewriter.transform(response);
                                     clearTimeout(timeout);
-                                    return originAllowed ? withCorsHeaders(transformed, reqOrigin, false) : transformed;
+                                    return transformed;
                                 }
 
                                 const resp = new Response(JSON.stringify(j.result), {
                                     status: 200,
-                                    headers: { "Content-Type": "application/json" }
+                                    headers: { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*" }
                                 });
                                 clearTimeout(timeout);
-                                return originAllowed ? withCorsHeaders(resp, reqOrigin, false) : resp;
+                                return resp;
                             }
 
                             // fallback: raw JSON
                             const fallbackResp = new Response(JSON.stringify(j), {
                                 status: brResp.status || 200,
-                                headers: { "Content-Type": "application/json" }
+                                headers: { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*" }
                             });
                             clearTimeout(timeout);
-                            return originAllowed ? withCorsHeaders(fallbackResp, reqOrigin, false) : fallbackResp;
+                            return fallbackResp;
                         } // end if j
                         // if j is null, fallthrough to next branch
                     } // end JSON handling
@@ -517,6 +422,7 @@ export default {
                         if (contentLength) forwardHeaders.set("Content-Length", contentLength);
                         const cacheControl = brResp.headers.get("cache-control");
                         if (cacheControl) forwardHeaders.set("Cache-Control", cacheControl);
+                        forwardHeaders.set("Access-Control-Allow-Origin", "*");
                         forwardHeaders.set("Vary", "Origin");
 
                         const response = new Response(brResp.body, { status: brResp.status, headers: forwardHeaders });
@@ -528,7 +434,7 @@ export default {
                         }
 
                         clearTimeout(timeout);
-                        return originAllowed ? withCorsHeaders(response, reqOrigin, false) : response;
+                        return response;
                     }
 
                     // record and try next candidate
@@ -540,15 +446,13 @@ export default {
 
             // all attempts failed
             console.error("All BR payload attempts failed. lastErr:", lastErr);
-            const r = new Response(JSON.stringify({ error: "upstream_schema_mismatch", details: lastErr }), {
+            return new Response(JSON.stringify({ error: "upstream_schema_mismatch", details: lastErr }), {
                 status: 400,
-                headers: { "Content-Type": "application/json" },
+                headers: { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*" },
             });
-            return originAllowed ? withCorsHeaders(r, reqOrigin, false) : r;
         } catch (err) {
             console.error("unexpected error:", err);
-            const r = jsonError("internal_error", 500);
-            return originAllowed ? withCorsHeaders(r, reqOrigin, false) : r;
+            return jsonError("internal_error", 500);
         }
     },
 };
@@ -557,7 +461,7 @@ export default {
 function jsonError(message, status) {
     return new Response(JSON.stringify({ error: message, status }), {
         status,
-        headers: { "Content-Type": "application/json" },
+        headers: { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*" },
     });
 }
 function isHttpUrl(u) {
@@ -691,17 +595,15 @@ export class BrDurableObject {
                 method: request.method,
                 url: url.href,
             };
-            const r = new Response(JSON.stringify(body, null, 2), {
+            return new Response(JSON.stringify(body, null, 2), {
                 status: 200,
-                headers: { "Content-Type": "application/json" },
+                headers: { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*" },
             });
-            return withCorsHeaders(r, request.headers.get("Origin") || "", false);
         } catch (e) {
-            const r = new Response(JSON.stringify({ error: String(e) }, null, 2), {
+            return new Response(JSON.stringify({ error: String(e) }, null, 2), {
                 status: 500,
-                headers: { "Content-Type": "application/json" },
+                headers: { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*" },
             });
-            return withCorsHeaders(r, request.headers.get("Origin") || "", false);
         }
     }
 }
